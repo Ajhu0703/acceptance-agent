@@ -3,6 +3,7 @@ import docx
 from docx.shared import Inches
 import pdfplumber
 import io
+import re
 
 st.set_page_config(page_title="材料驗收單自動生成器", layout="centered")
 
@@ -20,7 +21,6 @@ st.markdown("---")
 # 2. 檔案上傳區
 uploaded_pdf = st.file_uploader("1. 上傳材料明細 PDF (.pdf)", type=["pdf"])
 uploaded_doc = st.file_uploader("2. 上傳空白 Word 範本 (.docx)", type=["docx"])
-# 讓使用者可以自由上傳，我們在程式中自動按檔名數字或順序排序
 uploaded_images = st.file_uploader("3. 上傳材料照片 (多張一次選取)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 def parse_pdf_items(pdf_file):
@@ -54,9 +54,7 @@ if st.button("🚀 產生驗收單文件"):
         # B. 智慧處理照片對應（自動依檔名內的數字排序，例如 1 號圖對應品號 1）
         sorted_images = []
         if uploaded_images:
-            # 嘗試依照檔名包含的數字排序
             def extract_img_number(img_file):
-                import re
                 nums = re.findall(r'\d+', img_file.name)
                 return int(nums[-1]) if nums else 999
             
@@ -66,19 +64,19 @@ if st.button("🚀 產生驗收單文件"):
         doc = docx.Document(uploaded_doc)
 
         img_idx = 0
-        # D. 遍歷 Word 表格，填入文字與依序填入照片
+        # D. 遍歷 Word 表格，填入文字與照片
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
                     cell_text = cell.text.strip()
 
                     # 1. 填寫頂端抬頭
-                    if "驗收單號" in cell_text or "班級" in cell_text:
+                    if "驗收單號" in cell_text or "班級" in cell_text or "115W0149" in cell_text:
                         cell.text = class_name
                     elif "進貨日" in cell_text:
                         cell.text = f"進貨日：{date_str}"
 
-                    # 2. 處理照片格
+                    # 2. 處理照片格 (儲存格內有「照片」或是空的純圖片預留格)
                     elif "照片" in cell_text:
                         cell.text = "" # 清空標籤
                         if img_idx < len(sorted_images):
@@ -86,9 +84,9 @@ if st.button("🚀 產生驗收單文件"):
                             p.add_run().add_picture(sorted_images[img_idx], width=Inches(2.2))
                             img_idx += 1
 
-                    # 3. 處理文字格
+                    # 3. 處理文字格 (關鍵修正：找尋「品號」加上數字)
                     elif "品號" in cell_text:
-                        import re
+                        # 抓出「品號1」、「品號 1」裡面的數字
                         match = re.search(r'品號\s*(\d+)', cell_text)
                         if match:
                             p_num = match.group(1)
