@@ -22,37 +22,48 @@ uploaded_doc = st.file_uploader("2. 上傳空白 Word 範本 (.docx)", type=["do
 uploaded_images = st.file_uploader("3. 上傳材料照片 (多張一次選取)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 def parse_pdf_items(pdf_file):
-    """超強效 PDF 解析：同時支援表格與純文字逐行掃描"""
+    """修正欄位對應：精準抓取品號、品名、規格、數量 (過濾單價與金額)"""
     items = {}
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            # 方式 1: 嘗試抽取表格
+            # 1. 優先使用表格解析
             tables = page.extract_tables()
             for table in tables:
                 for row in table:
                     if not row: continue
                     clean_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                    # 當第一欄是數字（品號）
                     if clean_row[0].isdigit():
                         p_num = clean_row[0]
+                        p_name = clean_row[1] if len(clean_row) > 1 else ""
+                        p_spec = clean_row[2] if len(clean_row) > 2 else ""
+                        
+                        # 修正數量：判斷欄位長度，通常數量在倒數第 2 欄或第 5 欄 (index 4 或 5)
+                        # 如果有 6 個欄位 (品號, 品名, 規格, 單價, 數量, 金額)，數量為 index 4
+                        p_qty = "1"
+                        if len(clean_row) >= 6:
+                            p_qty = clean_row[4]
+                        elif len(clean_row) == 5:
+                            p_qty = clean_row[3]
+                        
                         items[p_num] = {
-                            "name": clean_row[1] if len(clean_row) > 1 else "",
-                            "spec": clean_row[2] if len(clean_row) > 2 else "",
-                            "qty": clean_row[4] if len(clean_row) > 4 else (clean_row[3] if len(clean_row) > 3 else "1")
+                            "name": p_name,
+                            "spec": p_spec,
+                            "qty": p_qty
                         }
             
-            # 方式 2: 若表格抓不到，直接抽取純文字逐行掃描
+            # 2. 備用純文字解析
             if not items:
                 text = page.extract_text()
                 if text:
-                    lines = text.split('\n')
-                    for line in lines:
+                    for line in text.split('\n'):
                         parts = line.split()
-                        # 如果該行開頭第一個字是數字 (品號)
                         if parts and parts[0].isdigit():
                             p_num = parts[0]
                             p_name = parts[1] if len(parts) > 1 else ""
                             p_spec = parts[2] if len(parts) > 2 else ""
-                            p_qty = parts[-1] if len(parts) > 3 else "1"
+                            # 純文字情況下，數量通常在規格後的數字
+                            p_qty = parts[4] if len(parts) > 5 else (parts[3] if len(parts) > 4 else "1")
                             items[p_num] = {
                                 "name": p_name,
                                 "spec": p_spec,
@@ -67,24 +78,25 @@ if st.button("🚀 產生驗收單文件"):
         # A. 解析 PDF
         items_dict = parse_pdf_items(uploaded_pdf)
         
-        if items_dict:
-            st.info(f"✅ PDF 解析成功！共抓取到 {len(items_dict)} 筆品號資料。")
-        else:
-            st.error("❌ PDF 解析失敗，可能是掃描圖片檔。請確認 PDF 檔是否能複製文字！")
-
-        # B. 處理照片排序
-        sorted_images = []
+        # B. 精準處理照片檔名括號內的數字：如 U-2026-08-03(1).jpg -> 抓出 1
+        image_map = {}
         if uploaded_images:
-            def extract_img_number(img_file):
-                nums = re.findall(r'\d+', img_file.name)
-                return int(nums[-1]) if nums else 999
-            sorted_images = sorted(uploaded_images, key=extract_img_number)
+            for img in uploaded_images:
+                # 優先尋找括號內的數字 (1) 或檔名最後面的數字
+                match = re.search(r'\((\d+)\)', img.name)
+                if match:
+                    p_num = match.group(1)
+                else:
+                    nums = re.findall(r'\d+', img.name)
+                    p_num = nums[-1] if nums else None
+                
+                if p_num:
+                    image_map[p_num] = img
 
         # C. 載入 Word 範本
         doc = docx.Document(uploaded_doc)
 
-        img_idx = 0
-        # D. 逐一比對與替換
+        # D. 遍歷 Word 表格與替換
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
@@ -96,24 +108,24 @@ if st.button("🚀 產生驗收單文件"):
                     elif "進貨日" in cell_text:
                         cell.text = f"進貨日：{date_str}"
 
-                    # 2. 照片
-                    elif "照片" in cell_text:
-                        cell.text = ""
-                        if img_idx < len(sorted_images):
-                            p = cell.paragraphs[0]
-                            p.add_run().add_picture(sorted_images[img_idx], width=Inches(2.2))
-                            img_idx += 1
-
-                    # 3. 品號文字格替換
+                    # 2. 品號與照片比對 (以品號數字發動)
                     elif "品號" in cell_text or "品名" in cell_text:
                         nums = re.findall(r'\d+', cell_text)
                         if nums:
                             p_num = nums[0]
-                            if p_num in items_dict:
-                                info = items_dict[p_num]
-                                cell.text = f"品號{p_num} {info['name']} {info['spec']} 數量:{info['qty']}"
+                            
+                            # 如果這格是照片格
+                            if "照片" in cell_text or "的照片" in cell_text:
+                                cell.text = ""
+                                if p_num in image_map:
+                                    p = cell.paragraphs[0]
+                                    p.add_run().add_picture(image_map[p_num], width=Inches(2.2))
+                            
+                            # 如果這格是文字說明格
                             else:
-                                cell.text = f"品號{p_num} (未於PDF找到品名)"
+                                if p_num in items_dict:
+                                    info = items_dict[p_num]
+                                    cell.text = f"品號{p_num} {info['name']} {info['spec']} 數量:{info['qty']}"
 
         # E. 加會驗結果
         p = doc.add_paragraph()
@@ -123,7 +135,7 @@ if st.button("🚀 產生驗收單文件"):
         bio = io.BytesIO()
         doc.save(bio)
         
-        st.success("🎉 驗收單文件生成成功！")
+        st.success("🎉 驗收單文件生成成功！數量與照片對應已更新！")
         st.download_button(
             label="📥 下載完成的 Word 檔",
             data=bio.getvalue(),
