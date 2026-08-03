@@ -51,48 +51,46 @@ if st.button("🚀 產生驗收單文件"):
         # A. 解析 PDF 材料清單
         items_dict = parse_pdf_items(uploaded_pdf)
         
-        # B. 智慧處理照片對應（自動依檔名內的數字排序，例如 1 號圖對應品號 1）
+        # B. 智慧處理照片對應 (按檔名數字排序)
         sorted_images = []
         if uploaded_images:
             def extract_img_number(img_file):
                 nums = re.findall(r'\d+', img_file.name)
                 return int(nums[-1]) if nums else 999
-            
             sorted_images = sorted(uploaded_images, key=extract_img_number)
 
         # C. 載入 Word 範本
         doc = docx.Document(uploaded_doc)
 
         img_idx = 0
-        # D. 遍歷 Word 表格，填入文字與照片
+        # D. 遍歷 Word 表格與替換
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    cell_text = cell.text.strip()
+                    # 清除空白以利精準比對
+                    text_no_space = cell.text.replace(" ", "").strip()
 
-                    # 1. 填寫頂端抬頭
-                    if "驗收單號" in cell_text or "班級" in cell_text or "115W0149" in cell_text:
+                    # 1. 頂端抬頭處理
+                    if "驗收單號" in cell.text or "班級" in cell.text or "115W0149" in cell.text:
                         cell.text = class_name
-                    elif "進貨日" in cell_text:
+                    elif "進貨日" in cell.text:
                         cell.text = f"進貨日：{date_str}"
 
-                    # 2. 處理照片格 (儲存格內有「照片」或是空的純圖片預留格)
-                    elif "照片" in cell_text:
-                        cell.text = "" # 清空標籤
+                    # 2. 照片格處理
+                    elif "照片" in cell.text:
+                        cell.text = ""
                         if img_idx < len(sorted_images):
                             p = cell.paragraphs[0]
                             p.add_run().add_picture(sorted_images[img_idx], width=Inches(2.2))
                             img_idx += 1
 
-                    # 3. 處理文字格 (關鍵修正：找尋「品號」加上數字)
-                    elif "品號" in cell_text:
-                        # 抓出「品號1」、「品號 1」裡面的數字
-                        match = re.search(r'品號\s*(\d+)', cell_text)
-                        if match:
-                            p_num = match.group(1)
-                            if p_num in items_dict:
-                                info = items_dict[p_num]
+                    # 3. 品號文字格處理 (列出 1~30 號直接對應覆蓋)
+                    else:
+                        for p_num, info in items_dict.items():
+                            # 只要儲存格包含「品號1」、「品號 1」等字眼
+                            if f"品號{p_num}" in text_no_space or f"品號_{p_num}" in text_no_space:
                                 cell.text = f"品號{p_num} {info['name']} {info['spec']} 數量:{info['qty']}"
+                                break
 
         # E. 末端加上會驗結果聲明
         p = doc.add_paragraph()
