@@ -24,31 +24,29 @@ uploaded_doc = st.file_uploader("2. 上傳空白 Word 範本 (.docx)", type=["do
 uploaded_images = st.file_uploader("3. 上傳材料照片 (可多選，按品號順序)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 def parse_pdf_items(pdf_file):
-    """解析 PDF 提取品號、品名、規格、數量"""
+    """強力版 PDF 文字解析：直接逐行比對提取品號、品名、規格、數量"""
     items = {}
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                for row in table:
-                    # 濾除空行或表頭
-                    if not row or "品號" in str(row[0]):
-                        continue
-                    # 處理欄位資料
-                    try:
-                        p_no = str(row[0]).strip()
-                        p_name = str(row[1]).strip() if len(row) > 1 else ""
-                        p_spec = str(row[2]).strip() if len(row) > 2 else ""
-                        p_qty = str(row[4]).strip() if len(row) > 4 else ""
-                        
-                        if p_no.isdigit():
-                            items[p_no] = {
-                                "name": p_name,
-                                "spec": p_spec,
-                                "qty": p_qty
-                            }
-                    except Exception:
-                        continue
+            text = page.extract_text()
+            if not text:
+                continue
+            for line in text.split('\n'):
+                parts = line.split()
+                # 當一行開頭是數字（品號），且包含品名相關資料時
+                if parts and parts[0].isdigit():
+                    p_num = parts[0]
+                    # 抓取該品號對應的剩餘欄位
+                    p_name = parts[1] if len(parts) > 1 else ""
+                    p_spec = parts[2] if len(parts) > 2 else ""
+                    # 尋找數量 (單位後面的數字，如 包 1 -> 1)
+                    p_qty = parts[4] if len(parts) > 4 else (parts[3] if len(parts) > 3 else "1")
+                    
+                    items[p_num] = {
+                        "name": p_name,
+                        "spec": p_spec,
+                        "qty": p_qty
+                    }
     return items
 
 # 3. 產生文件按鈕
@@ -63,46 +61,41 @@ if st.button("🚀 產生驗收單文件"):
         
         # B. 載入 Word 範本
         doc = docx.Document(uploaded_doc)
-        
-        # 替換抬頭資訊
-        for p in doc.paragraphs:
-            if "班級" in p.text or "驗收單號" in p.text:
-                p.text = f"班級名稱：{class_name}"
-            if "進貨日" in p.text:
-                p.text = f"進貨日期：{date_str}"
 
-        # 圖片列表與計數器
+        # 圖片列表
         img_list = list(uploaded_images) if uploaded_images else []
         img_idx = 0
 
-        # C. 遍歷表格，填入文字與照片
+        # C. 遍歷 Word 表格，替換文字與插入照片
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    # 填寫頂端表頭
-                    if "驗收單號" in cell.text:
+                    cell_text = cell.text.strip()
+
+                    # 1. 填寫頂端抬頭
+                    if "驗收單號" in cell_text or "班級" in cell_text:
                         cell.text = class_name
-                    elif "進貨日" in cell.text:
+                    elif "進貨日" in cell_text:
                         cell.text = f"進貨日：{date_str}"
-                    
-                    # 填寫照片與資料
-                    text = cell.text.strip()
-                    
-                    # 判斷是否為照片欄位 (如: 品號1的照片)
-                    if "的照片" in text or "照片" in text:
+
+                    # 2. 插入照片
+                    elif "照片" in cell_text or "的照片" in cell_text:
                         if img_idx < len(img_list):
-                            cell.text = "" # 清空原文字
+                            cell.text = "" # 清空原標籤
                             p = cell.paragraphs[0]
                             p.add_run().add_picture(img_list[img_idx], width=Inches(2.2))
                             img_idx += 1
-                            
-                    # 判斷是否為文字欄位 (如: 品號1 品名 規格 數量)
-                    match = re.search(r'品號\s*(\d+)', text)
-                    if match:
-                        p_num = match.group(1)
-                        if p_num in items_dict:
-                            info = items_dict[p_num]
-                            cell.text = f"品號{p_num} {info['name']} {info['spec']} 數量：{info['qty']}"
+
+                    # 3. 填寫品號文字 (搜尋 品號1, 品號2... 或 品號 1)
+                    elif "品號" in cell_text:
+                        match = re.search(r'品號\s*(\d+)', cell_text)
+                        if match:
+                            p_num = match.group(1)
+                            if p_num in items_dict:
+                                info = items_dict[p_num]
+                                cell.text = f"品號{p_num} {info['name']} {info['spec']} 數量:{info['qty']}"
+                            else:
+                                cell.text = f"品號{p_num}"
 
         # D. 末端加上會驗結果聲明
         p = doc.add_paragraph()
@@ -112,7 +105,7 @@ if st.button("🚀 產生驗收單文件"):
         bio = io.BytesIO()
         doc.save(bio)
         
-        st.success("🎉 文件生成成功！已自動將 PDF 材料資料與照片帶入！")
+        st.success("🎉 文件生成成功！已成功將 PDF 品號明細與照片同步帶入！")
         st.download_button(
             label="📥 下載完成的 Word 檔",
             data=bio.getvalue(),
