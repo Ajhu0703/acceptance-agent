@@ -1,5 +1,6 @@
 streamlit
 python-docx
 pdfplumber
-google-genai
-pillow
+Pillow
+google-generativeai
+
