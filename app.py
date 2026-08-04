@@ -60,14 +60,14 @@ if st.button("🚀 產生驗收單文件"):
         # A. 解析 PDF
         items_dict = parse_pdf_items(uploaded_pdf)
         
-        # 將材料清單格式化為給 AI 看的文字
         materials_text = "這是一份材料清單，包含品號、品名和規格：\n"
         for p_num, info in items_dict.items():
             materials_text += f"- 品號: {p_num}, 品名: {info['name']}, 規格: {info['spec']}\n"
 
-        # --- B. 核心修改：使用 Gemini 視覺辨識來配對照片 ---
         genai.configure(api_key=google_api_key)
-        model = genai.GenerativeModel('gemini-pro-vision') # 使用最新的 Flash 模型，速度快且成本低
+        # --- 唯一的修改處 ---
+        # 將模型更換為更穩定、泛用性更廣的 gemini-pro-vision
+        model = genai.GenerativeModel('gemini-pro-vision')
 
         image_map = {}
         unmatched_images = []
@@ -80,7 +80,6 @@ if st.button("🚀 產生驗收單文件"):
                 try:
                     image = Image.open(img_file)
                     
-                    # 準備給 AI 的指令 (Prompt)
                     prompt_parts = [
                         "任務：請根據下方提供的材料清單，判斷這張圖片中的物品最符合清單中的哪一個項目。\n",
                         "材料清單：\n",
@@ -90,11 +89,9 @@ if st.button("🚀 產生驗收單文件"):
                         "\n---",
                         "請只回覆最相符的「品號」數字，不要包含任何其他文字或解釋。"
                     ]
-
-                    # 呼叫 Gemini API
+                    
                     response = model.generate_content(prompt_parts)
                     
-                    # 從 AI 回應中提取品號數字
                     p_num_match = re.search(r'\d+', response.text)
                     if p_num_match:
                         p_num = p_num_match.group(0)
