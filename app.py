@@ -1,9 +1,12 @@
 import streamlit as st
 import docx
 from docx.shared import Inches
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 import pdfplumber
 import io
 import re
+import copy
 
 st.set_page_config(page_title="材料驗收單自動生成器", layout="centered")
 
@@ -69,14 +72,29 @@ def parse_pdf_items(pdf_file):
                             }
     return items
 
+def duplicate_last_two_rows(table):
+    """深層複製表格最後兩列 (照片列與文字列)，達成無縫動態新增"""
+    # 複製倒數第二列 (照片列)
+    row_img = table.rows[-2]
+    new_row_img = table.add_row()
+    for idx, cell in enumerate(row_img.cells):
+        new_row_img.cells[idx].text = cell.text
+        
+    # 複製最後一列 (文字列)
+    row_txt = table.rows[-2] # 剛加完一列後的倒數第二列
+    new_row_txt = table.add_row()
+    for idx, cell in enumerate(row_txt.cells):
+        new_row_txt.cells[idx].text = cell.text
+
 if st.button("🚀 產生驗收單文件"):
     if not uploaded_doc or not uploaded_pdf:
         st.error("請確保上傳了 Word 範本與 PDF 明細檔！")
     else:
         # A. 解析 PDF
         items_dict = parse_pdf_items(uploaded_pdf)
+        total_items = len(items_dict) if items_dict else 0
         
-        # B. 精準讀取照片檔名內的數字 (1.jpg, (1).jpg 等)
+        # B. 建立照片對應表
         image_map = {}
         if uploaded_images:
             for img in uploaded_images:
@@ -92,47 +110,73 @@ if st.button("🚀 產生驗收單文件"):
 
         # C. 載入 Word 範本
         doc = docx.Document(uploaded_doc)
+        table = doc.tables[0] # 取得主要表格
 
-        # D. 遍歷 Word 表格
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    cell_text = cell.text.strip()
+        # D. 動態檢查：若 PDF 數量超過 6 個，自動增加對應的表格列數
+        # 範本預設容納 6 個品號 (每 2 個品號占 2 列)
+        if total_items > 6:
+            extra_items = total_items - 6
+            # 每多 1~2 個品號，就新增一組 (照片列+文字列)
+            needed_pairs = (extra_items + 1) // 2 
+            for _ in range(needed_pairs):
+                duplicate_last_two_rows(table)
 
-                    # 1. 抬頭替換
-                    if "驗收單號" in cell_text or "班級" in cell_text or "115W0149" in cell_text:
-                        cell.text = class_name
-                    elif "進貨日" in cell_text:
-                        cell.text = f"進貨日：{date_str}"
+        # E. 重新重構表格內容：填入抬頭與全套品號 (包含超出的品號)
+        # 先填寫頂部抬頭資訊
+        table.rows[0].cells[0].text = class_name
+        table.rows[0].cells[1].text = f"進貨日：{date_str}"
 
-                    # 2. 關鍵修正：判斷是不是「照片格」（支援「序號 X 的照片」或「照片」）
-                    elif "照片" in cell_text:
-                        nums = re.findall(r'\d+', cell_text)
-                        cell.text = "" # 清空原文字 (如: 序號 1 的照片)
-                        if nums:
-                            p_num = nums[0]
-                            if p_num in image_map:
-                                p = cell.paragraphs[0]
-                                p.add_run().add_picture(image_map[p_num], width=Inches(2.2))
+        # 遍歷填寫所有品號與照片
+        # 表格結構：Row 1 是照片(1,2), Row 2 是文字(1,2) ; Row 3 是照片(3,4), Row 4 是文字(3,4) ...
+        current_p_num = 1
+        row_idx = 1
+        
+        while current_p_num <= max(total_items, 6) and row_idx < len(table.rows):
+            # 第一欄 (左側)
+            p1_str = str(current_p_num)
+            # 填寫左側照片
+            cell_img1 = table.rows[row_idx].cells[0]
+            cell_img1.text = ""
+            if p1_str in image_map:
+                p = cell_img1.paragraphs[0]
+                p.add_run().add_picture(image_map[p1_str], width=Inches(2.2))
+            
+            # 填寫左側文字
+            cell_txt1 = table.rows[row_idx + 1].cells[0]
+            if p1_str in items_dict:
+                info = items_dict[p1_str]
+                cell_txt1.text = f"品號{p1_str} {info['name']} {info['spec']} 數量:{info['qty']}"
+            else:
+                cell_txt1.text = f"品號{p1_str} 品名 規格 數量"
 
-                    # 3. 判斷是不是「品號/品名文字格」
-                    elif "品號" in cell_text or "品名" in cell_text:
-                        nums = re.findall(r'\d+', cell_text)
-                        if nums:
-                            p_num = nums[0]
-                            if p_num in items_dict:
-                                info = items_dict[p_num]
-                                cell.text = f"品號{p_num} {info['name']} {info['spec']} 數量:{info['qty']}"
+            # 第二欄 (右側)
+            p2_str = str(current_p_num + 1)
+            cell_img2 = table.rows[row_idx].cells[1]
+            cell_img2.text = ""
+            if p2_str in image_map:
+                p = cell_img2.paragraphs[0]
+                p.add_run().add_picture(image_map[p2_str], width=Inches(2.2))
+            
+            cell_txt2 = table.rows[row_idx + 1].cells[1]
+            if p2_str in items_dict:
+                info = items_dict[p2_str]
+                cell_txt2.text = f"品號{p2_str} {info['name']} {info['spec']} 數量:{info['qty']}"
+            else:
+                cell_txt2.text = f"品號{p2_str} 品名 規格 數量"
 
-        # E. 加會驗結果
+            # 指針前進 2 個品號、跳過 2 列
+            current_p_num += 2
+            row_idx += 2
+
+        # F. 加會驗結果
         p = doc.add_paragraph()
         p.add_run("會驗結果：經確認，到貨物品均於效期內，且與規格相符。").bold = True
 
-        # F. 輸出與下載
+        # G. 輸出下載
         bio = io.BytesIO()
         doc.save(bio)
         
-        st.success("🎉 驗收單文件生成成功！照片與資料已完美對齊！")
+        st.success(f"🎉 驗收單文件生成成功！共處理 {total_items} 個品號，表格已自動動態調整！")
         st.download_button(
             label="📥 下載完成的 Word 檔",
             data=bio.getvalue(),
