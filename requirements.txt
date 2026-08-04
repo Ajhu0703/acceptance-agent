@@ -1,7 +1,5 @@
 streamlit
 python-docx
 pdfplumber
-google-genai
 pillow
-
 
