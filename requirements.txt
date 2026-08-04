@@ -1,8 +1,7 @@
 streamlit
 python-docx
 pdfplumber
-Pillow
-requests
-
+google-genai
+pillow
 
 
