@@ -67,7 +67,7 @@ if st.button("🚀 產生驗收單文件"):
 
         # --- B. 核心修改：使用 Gemini 視覺辨識來配對照片 ---
         genai.configure(api_key=google_api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash') # 使用最新的 Flash 模型，速度快且成本低
+        model = genai.GenerativeModel('gemini-pro-vision') # 使用最新的 Flash 模型，速度快且成本低
 
         image_map = {}
         unmatched_images = []
