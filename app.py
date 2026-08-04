@@ -56,43 +56,27 @@ def parse_pdf_items(pdf_file):
 def image_to_base64(image):
     """將圖片物件轉換為 Base64 編碼"""
     buffered = io.BytesIO()
-    # 確保圖片是 RGB 格式
     if image.mode == 'RGBA':
         image = image.convert('RGB')
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def call_gemini_vision_api(api_key, image_base64, materials_text):
-    """直接呼叫 Google Gemini Vision API"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={api_key}"
+    """直接呼叫 Google Gemini Vision API (使用 v1 穩定版 URL)"""
+    # --- 關鍵修正處：將 v1beta 修正為 v1 ---
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro-vision:generateContent?key={api_key}"
     
-    headers = {
-        'Content-Type': 'application/json'
-    }
-    
+    headers = {'Content-Type': 'application/json'}
     prompt = "任務：請根據下方提供的材料清單，判斷這張圖片中的物品最符合清單中的哪一個項目。請只回覆最相符的「品號」數字，不要包含任何其他文字或解釋。"
-    
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {"text": materials_text},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": image_base64
-                        }
-                    }
-                ]
-            }
-        ]
+        "contents": [{"parts": [{"text": prompt}, {"text": materials_text}, {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}]}]
     }
     
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
         return response.json()
     else:
+        # 顯示更詳細的錯誤以方便除錯
         st.error(f"API 請求失敗: {response.status_code} - {response.text}")
         return None
 
@@ -116,7 +100,6 @@ if st.button("🚀 產生驗收單文件"):
                 try:
                     image = Image.open(img_file)
                     image_base64 = image_to_base64(image)
-                    
                     api_response = call_gemini_vision_api(google_api_key, image_base64, materials_text)
                     
                     if api_response and 'candidates' in api_response and api_response['candidates']:
@@ -132,7 +115,6 @@ if st.button("🚀 產生驗收單文件"):
                             unmatched_images.append(f"{img_file.name} (AI無法從回應中解析品號)")
                     else:
                         unmatched_images.append(f"{img_file.name} (API未返回有效結果)")
-
                 except Exception as e:
                     unmatched_images.append(f"{img_file.name} (處理失敗: {e})")
                 
@@ -141,7 +123,7 @@ if st.button("🚀 產生驗收單文件"):
             if unmatched_images:
                 st.warning(f"注意：有 {len(unmatched_images)} 張照片無法成功配對：\n- " + "\n- ".join(unmatched_images))
 
-        # ... (後續 Word 文件生成部分，維持不變) ...
+        # Word 文件生成部分 (維持不變)
         doc = docx.Document(uploaded_doc)
         for table in doc.tables:
             for row in table.rows:
